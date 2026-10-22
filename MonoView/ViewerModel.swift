@@ -14,6 +14,8 @@ final class ViewerModel: ObservableObject {
     @Published private(set) var isTiltEnabled = false
     @Published var tiltNotice: String?
     private let tiltController: any TiltControlling
+    private var tiltSweepStartZoom: CGFloat?
+    static let maximumZoom: CGFloat = 20
 
     init(tiltController: (any TiltControlling)? = nil) {
         self.tiltController = tiltController ?? TiltMotionService()
@@ -39,7 +41,7 @@ final class ViewerModel: ObservableObject {
         default: orientation = .portrait
         }
         let started = tiltController.start(orientation: orientation, onMove: { [weak self] delta in
-            guard let self, self.isTiltEnabled else { return }
+            guard let self, self.isTiltEnabled, self.tiltSweepStartZoom == nil else { return }
             self.offset = self.bounded(CGSize(width: self.offset.width + delta.width,
                                               height: self.offset.height + delta.height))
         }, onFailure: { [weak self] message in
@@ -51,6 +53,7 @@ final class ViewerModel: ObservableObject {
     }
 
     func stopTilt() {
+        tiltSweepStartZoom = nil
         guard isTiltEnabled else { return }
         isTiltEnabled = false
         tiltController.stop()
@@ -74,13 +77,44 @@ final class ViewerModel: ObservableObject {
         offset = bounded(offset)
     }
 
-    func changeZoom(by factor: CGFloat) {
+    func changeZoom(by factor: CGFloat, keepingTilt: Bool = false) {
+        guard factor.isFinite, factor > 0 else { return }
+        applyZoom(zoom * factor, keepingTilt: keepingTilt)
+    }
+
+    private func applyZoom(_ target: CGFloat, keepingTilt: Bool) {
+        guard target.isFinite else { return }
         leaveOverview()
-        let next = min(20, max(1, zoom * factor))
+        let next = min(Self.maximumZoom, max(1, target))
         let ratio = next / zoom
         zoom = next
-        if next <= 1 { stopTilt() }
+        // Thumb zoom can return to 1× without losing the active Tilt gesture mode.
+        if next <= 1 && !keepingTilt { stopTilt() }
         offset = bounded(CGSize(width: offset.width * ratio, height: offset.height * ratio))
+    }
+
+    func toggleTiltZoomLimit() {
+        guard isTiltEnabled, image != nil, !isLoading else { return }
+        tiltSweepStartZoom = nil
+        applyZoom(zoom >= Self.maximumZoom - 0.001 ? 1 : Self.maximumZoom, keepingTilt: true)
+        tiltController.recenter()
+    }
+
+    func updateTiltZoomSweep(translation: CGSize) {
+        guard isTiltEnabled, image != nil, !isLoading, translation.height.isFinite else { return }
+        if tiltSweepStartZoom == nil { tiltSweepStartZoom = zoom }
+        guard let start = tiltSweepStartZoom else { return }
+        // Each 100 screen points of vertical travel doubles/halves the scale.
+        // Horizontal travel is unrestricted, so left and right thumb arcs behave alike.
+        let exponent = min(10, max(-10, -translation.height / 100))
+        applyZoom(start * pow(2, exponent), keepingTilt: true)
+    }
+
+    func endTiltZoomSweep() {
+        guard tiltSweepStartZoom != nil else { return }
+        tiltSweepStartZoom = nil
+        // Finger movement can change the grip; restart motion from that resting pose.
+        if isTiltEnabled { tiltController.recenter() }
     }
 
     func move(dx: CGFloat, dy: CGFloat) {

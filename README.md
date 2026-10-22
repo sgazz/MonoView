@@ -13,7 +13,8 @@ MonoView aims to make photo detail easier to explore without multi-finger gestur
 - Calibrate comfortable thumb reach with repeated sweeps, confirm the hand, and try a suggested layout.
 - Use irregular, transparent touch regions following the traced band, with commands paginated when space is limited.
 - Use manual layout settings as an alternative to calibration.
-- Adjust tilt sensitivity; Stop and Center stay available in the fitted zone while tilt is active.
+- Adjust tilt sensitivity. While tilt is active, controls collapse to a translucent stop dot. Tap it to stop and restore the panel.
+- In tilt mode, double-tap the photo to switch between 20× zoom and fit (1×). Sweep your thumb upward to zoom in or downward to zoom out; curved sweeps work with either hand. Tilt remains active at 1×.
 - English interface and VoiceOver labels/actions.
 
 ## Open and run
@@ -49,8 +50,8 @@ xcodebuild -project MonoView.xcodeproj -scheme MonoView \
 - Fitted regions require a 57×57 pt core before rendering; tests check a 44×44 pt inner touch area. Very narrow traces fall back to manual setup.
 - Calibrated layouts apply to their recorded window size and orientation. Other orientations and accessibility text sizes use the manual layout.
 - Photo decoding caps the longer dimension at 4096 pixels. Zoom enlarges existing detail; it does not create detail. Full-resolution tiled rendering is not implemented yet.
-- Tilt starts off and stops on background transitions, Settings, photo dragging, viewport changes, overview, import and reset. Sensor direction and comfort need physical-device testing.
-- Device builds and test compilation have been checked. Standalone geometry and tilt-math checks have run; the full automated iOS test suite has not yet been confirmed to execute successfully.
+- Tilt starts off and stops on the stop dot, background transitions, Settings, viewport changes, overview, import and reset. Thumb sweeps pause sensor movement while zooming and recenter it on release. Sensor direction and comfort need physical-device testing.
+- iOS Release builds, 18 unit tests and targeted UI flows have passed. Simulator UI tests use a DEBUG-only motion stand-in to verify tilt gestures and panel transitions; real sensor behavior needs a physical device.
 
 ## Local data
 

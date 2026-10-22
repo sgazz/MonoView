@@ -168,6 +168,65 @@ struct MonoViewTests {
         #expect(abs(a.height + b.height) < 0.00001)
     }
 
+    @Test @MainActor func tiltThumbZoomTogglesLimitsAndStaysActiveAtFit() async throws {
+        let source = MockTiltController()
+        let model = ViewerModel(tiltController: source)
+        let data = try #require(UIGraphicsImageRenderer(size: CGSize(width: 600, height: 600)).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 600, height: 600))
+        }.pngData())
+        await model.completeImport(data, id: model.beginImport())
+        model.resizeViewport(CGSize(width: 300, height: 300))
+        model.changeZoom(by: 2)
+        model.toggleTilt()
+        model.toggleTiltZoomLimit()
+        #expect(model.zoom == 20 && model.isTiltEnabled)
+        model.toggleTiltZoomLimit()
+        #expect(model.zoom == 1 && model.isTiltEnabled)
+        source.onMove?(CGSize(width: 100, height: 100))
+        #expect(model.offset == .zero)
+        model.toggleTiltZoomLimit()
+        #expect(model.zoom == 20 && model.isTiltEnabled)
+        model.stopTilt()
+        model.toggleTiltZoomLimit()
+        #expect(model.zoom == 20 && !model.isTiltEnabled)
+    }
+
+    @Test @MainActor func thumbSweepUsesVerticalTravelAndPausesMotionUntilRelease() async throws {
+        let source = MockTiltController()
+        let model = ViewerModel(tiltController: source)
+        let data = try #require(UIGraphicsImageRenderer(size: CGSize(width: 600, height: 600)).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 600, height: 600))
+        }.pngData())
+        await model.completeImport(data, id: model.beginImport())
+        model.resizeViewport(CGSize(width: 300, height: 300))
+        model.changeZoom(by: 2)
+        model.toggleTilt()
+        model.updateTiltZoomSweep(translation: CGSize(width: -80, height: -50))
+        model.updateTiltZoomSweep(translation: CGSize(width: 80, height: -100))
+        #expect(abs(model.zoom - 4) < 0.0001) // Based on the sweep start, not compounded per sample.
+        let frozen = model.offset
+        source.onMove?(CGSize(width: 30, height: -20))
+        #expect(model.offset == frozen)
+        model.endTiltZoomSweep()
+        #expect(source.recenterCount == 1)
+        source.onMove?(CGSize(width: 30, height: -20))
+        #expect(model.offset == CGSize(width: 30, height: -20))
+        model.updateTiltZoomSweep(translation: CGSize(width: -200, height: 100))
+        #expect(abs(model.zoom - 2) < 0.0001)
+        model.endTiltZoomSweep()
+        model.updateTiltZoomSweep(translation: CGSize(width: 200, height: 0))
+        #expect(model.zoom == 2)
+        model.endTiltZoomSweep()
+        model.updateTiltZoomSweep(translation: CGSize(width: 0, height: -10000))
+        #expect(model.zoom == 20)
+        model.updateTiltZoomSweep(translation: CGSize(width: 0, height: 10000))
+        #expect(model.zoom == 1 && model.isTiltEnabled && model.offset == .zero)
+        model.endTiltZoomSweep()
+        model.stopTilt()
+        model.updateTiltZoomSweep(translation: CGSize(width: 0, height: -100))
+        #expect(model.zoom == 1)
+    }
+
     @Test @MainActor func tiltStopsOnOverviewImportAndResetAndClampsMotion() async throws {
         let source = MockTiltController()
         let model = ViewerModel(tiltController: source)

@@ -47,14 +47,14 @@ struct ReachTerritoryLabel: View {
             // Clear fill retains the full custom hit area without hiding photo detail.
             shape.fill(Color.clear, style: FillStyle(eoFill: true))
             shape.stroke(Color.black.opacity(0.65), style: StrokeStyle(lineWidth: 4, lineJoin: .round))
-            shape.stroke(primary ? Color.yellow : Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+            shape.stroke(Color.white, style: StrokeStyle(lineWidth: primary ? 2.5 : 1.5, lineJoin: .round))
             VStack(spacing: 2) {
                 Image(systemName: checked ? "checkmark.circle.fill" : icon).font(.system(size: 21, weight: .bold))
                 Text(title).font(.callout.weight(.semibold)).lineLimit(1)
             }
-            .foregroundStyle(primary ? Color.yellow : Color.white)
+            .foregroundStyle(primary ? MonoTheme.deepBlue : MonoTheme.white)
             .frame(width: 54, height: 50)
-            .background(Color.black.opacity(reduceTransparency ? 1 : 0.6), in: RoundedRectangle(cornerRadius: 8))
+            .background(primary ? MonoTheme.white : MonoTheme.deepBlue.opacity(reduceTransparency ? 1 : 0.92), in: RoundedRectangle(cornerRadius: 12))
             .position(x: region.anchor.x * canvasSize.width - bounds.minX, y: region.anchor.y * canvasSize.height - bounds.minY)
             .accessibilityHidden(true)
         }

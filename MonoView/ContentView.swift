@@ -2,13 +2,21 @@ import SwiftUI
 import PhotosUI
 
 struct ContentView: View {
-    @StateObject private var model = ViewerModel()
+    @StateObject private var model: ViewerModel
+    @State private var tiltDotAnchor: CGPoint?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(model: ViewerModel? = nil) {
+        _model = StateObject(wrappedValue: model ?? ViewerModel())
+    }
     @State private var selection: PhotosPickerItem?
     @State private var showSettings = false
     @AppStorage("reachSetupCompleted") private var reachSetupCompleted = false
     @AppStorage("reachCalibrationVersion") private var reachCalibrationVersion = 0
     @AppStorage("reachCalibrationProfile") private var reachCalibrationData = Data()
     @State private var showCalibration = false
+    @AppStorage("purposeIntroSeen") private var purposeIntroSeen = false
+    @State private var showPurpose = false
     @State private var calibrateAfterSettings = false
     @State private var pendingProfile: ReachProfile?
     @State private var storedProfile: ReachProfile?
@@ -18,6 +26,7 @@ struct ContentView: View {
     @State private var testedControls: Set<Int> = []
     @State private var lastTestedControl = ""
     @GestureState private var drag: CGSize = .zero
+    @GestureState private var tiltSweepActive = false
     @AppStorage("preferredHand") private var preferredHand = "right"
     @AppStorage("lightCanvas") private var lightCanvas = false
     @AppStorage("controlLift") private var controlLift = 0.0
@@ -66,7 +75,10 @@ struct ContentView: View {
         .onAppear {
             storedProfile = try? JSONDecoder().decode(ReachProfile.self, from: reachCalibrationData)
             model.setTiltSensitivity(tiltSensitivity)
-            if reachCalibrationVersion < 2 { beginReachSetup() }
+            if !purposeIntroSeen || reachCalibrationVersion < 2 {
+                showPurpose = !purposeIntroSeen
+                beginReachSetup()
+            }
         }
         .onChange(of: preferredHand) { _, hand in
             if activeProfile?.hand != hand { useManualLayout() }
@@ -81,9 +93,16 @@ struct ContentView: View {
         .onChange(of: showSettings) { _, shown in if shown { model.stopTilt() } }
         .onChange(of: showCalibration) { _, shown in if shown { model.stopTilt() } }
         .onChange(of: tiltSensitivity) { _, value in model.setTiltSensitivity(value) }
+        .onChange(of: model.isTiltEnabled) { _, enabled in
+            if !enabled { tiltDotAnchor = nil }
+        }
+        .onChange(of: tiltSweepActive) { _, active in
+            if !active { model.endTiltZoomSweep() }
+        }
         .onDisappear { model.stopTilt() }
         .onChange(of: typeSize) { _, _ in controlPage = 0; clearReachTrials() }
-        .background(Color.black)
+        .background(MonoTheme.surface)
+        .tint(MonoTheme.accent)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showSettings, onDismiss: {
             if calibrateAfterSettings {
@@ -92,6 +111,13 @@ struct ContentView: View {
             }
         }) { settings }
         .fullScreenCover(isPresented: $showCalibration) {
+            if showPurpose {
+                MonoPurposeView {
+                    purposeIntroSeen = true
+                    showPurpose = false
+                    if reachCalibrationVersion >= 2 { showCalibration = false }
+                }
+            } else {
             ReachCalibrationView(initialHand: preferredHand, onManual: {
                 showCalibration = false
                 useManualLayout()
@@ -106,6 +132,7 @@ struct ContentView: View {
                 isSettingUp = true
                 showCalibration = false
             })
+            }
         }
         .alert("Unable to open image", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) { model.errorMessage = nil }
@@ -126,7 +153,10 @@ struct ContentView: View {
     private func fullScreenContent(size: CGSize) -> some View {
         ZStack(alignment: preferredHand == "left" ? .bottomLeading : .bottomTrailing) {
             imageArea.ignoresSafeArea()
-            if let profile = activeProfile, profile.matches(size), !typeSize.isAccessibilitySize {
+            if model.isTiltEnabled {
+                tiltDot(size: size)
+                    .transition(.opacity)
+            } else if let profile = activeProfile, profile.matches(size), !typeSize.isAccessibilitySize {
                 if let regions = profile.regions, regions.count >= 2 {
                     curvedControls(regions, size: size)
                     let pages = (10 + regions.count - 2) / (regions.count - 1)
@@ -151,6 +181,18 @@ struct ContentView: View {
             }
         }
         .frame(width: size.width, height: size.height)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.isTiltEnabled)
+    }
+
+    private func tiltDot(size: CGSize) -> some View {
+        let profile = typeSize.isAccessibilitySize ? nil : activeProfile.flatMap { $0.matches(size) ? $0 : nil }
+        let fallback = CGPoint(x: preferredHand == "left" ? 36 : max(36, size.width - 36),
+                               y: max(36, size.height - min(CGFloat(controlLift), size.height * 0.12) - 36))
+        let anchor = profile != nil ? tiltDotAnchor ?? profile.map { CGPoint(x: $0.rect(in: size).midX, y: $0.rect(in: size).midY) } ?? fallback : fallback
+        return TiltDotButton(zoom: model.zoom) { model.stopTilt() }
+            .position(x: min(max(30, anchor.x), max(30, size.width - 30)),
+                      y: min(max(30, anchor.y), max(30, size.height - 30)))
+            .frame(width: size.width, height: size.height)
     }
 
     private var overlayControls: Bool { model.image != nil && !isSettingUp && !showSettings }
@@ -226,7 +268,12 @@ struct ContentView: View {
                 else if item == 9 { finishReachSetup() }
                 else if item == 10 { useManualLayout(); startManualSetup() }
                 else if isSettingUp { testedControls.insert(item); lastTestedControl = names[item] }
-                else { performCurvedAction(item) }
+                else {
+                    if item == 13 {
+                        tiltDotAnchor = CGPoint(x: region.anchor.x * size.width, y: region.anchor.y * size.height)
+                    }
+                    performCurvedAction(item)
+                }
             } label: { label }
             .buttonStyle(ReachTerritoryPressStyle())
             .contentShape(shape, eoFill: true)
@@ -294,27 +341,37 @@ struct ContentView: View {
                         .offset(model.isOverview ? .zero : model.bounded(CGSize(width: model.offset.width + drag.width, height: model.offset.height + drag.height)))
                         .accessibilityLabel("Selected image")
                         .accessibilityValue(model.isOverview ? "Full image overview" : "Zoom \(Int(model.zoom * 100)) percent")
-                        .accessibilityHint("Use the direction buttons to explore the image. Adjust up or down to change the zoom.")
+                        .accessibilityIdentifier("viewerImage")
+                        .accessibilityHint(model.isTiltEnabled
+                                            ? "Tilt to explore. Use Actions to toggle maximum zoom, or adjust up and down to change zoom with VoiceOver."
+                                            : "Use the direction buttons to explore the image. Adjust up or down to change the zoom.")
                         .accessibilityAdjustableAction { direction in
                             switch direction {
-                            case .increment: model.changeZoom(by: 1.5)
-                            case .decrement: model.changeZoom(by: 1 / 1.5)
+                            case .increment: model.changeZoom(by: 1.5, keepingTilt: model.isTiltEnabled)
+                            case .decrement: model.changeZoom(by: 1 / 1.5, keepingTilt: model.isTiltEnabled)
                             @unknown default: break
                             }
                         }
-                        .gesture(DragGesture().onChanged { _ in model.stopTilt() }.updating($drag) { value, state, _ in state = value.translation }
-                            .onEnded { model.finishDrag($0.translation) })
+                        .accessibilityActions {
+                            if model.isTiltEnabled {
+                                Button("Toggle maximum zoom") { model.toggleTiltZoomLimit() }
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .gesture(imageGesture)
                 } else {
                     VStack(spacing: 16) {
-                        Image(systemName: "viewfinder").font(.system(size: 56)).accessibilityHidden(true)
-                        Text("MonoView").font(.largeTitle.bold())
+                        MonoBrandMark(size: 104)
+                        Text("MonoView").font(.system(.largeTitle, design: .rounded, weight: .bold))
                         Text("See the detail.\nUse one hand.")
                             .font(.title3).multilineTextAlignment(.center)
-                        Text("Choose a photo below. Adjust the controls in Settings to suit your thumb.")
+                        Text("Open a photo to begin. Fit the controls to your hand in Settings.")
                             .font(.body).multilineTextAlignment(.center)
                     }
-                    .foregroundStyle(lightCanvas ? .black : .white)
+                    .foregroundStyle(MonoTheme.text)
                     .padding(28)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(MonoBackground())
                 }
                 if model.isLoading {
                     VStack(spacing: 12) {
@@ -327,9 +384,25 @@ struct ContentView: View {
                 }
             }
             .clipped()
+            .coordinateSpace(name: "viewerSurface")
             .onAppear { model.resizeViewport(geometry.size) }
             .onChange(of: geometry.size) { _, size in model.resizeViewport(size) }
         }
+    }
+
+    private var imageGesture: AnyGesture<Void> {
+        if model.isTiltEnabled {
+            let doubleTap = TapGesture(count: 2).onEnded { model.toggleTiltZoomLimit() }
+            let sweep = DragGesture(minimumDistance: 8, coordinateSpace: .named("viewerSurface"))
+                .updating($tiltSweepActive) { _, active, _ in active = true }
+                .onChanged { model.updateTiltZoomSweep(translation: $0.translation) }
+                .onEnded { _ in model.endTiltZoomSweep() }
+            return AnyGesture(doubleTap.exclusively(before: sweep).map { _ in () })
+        }
+        let pan = DragGesture()
+            .updating($drag) { value, state, _ in state = value.translation }
+            .onEnded { model.finishDrag($0.translation) }
+        return AnyGesture(pan.map { _ in () })
     }
 
     private func controls(maxHeight: CGFloat, compact: Bool = false) -> some View {
@@ -338,23 +411,25 @@ struct ContentView: View {
         let order = preferredHand == "left" ? [2, 1, 0, 3, 4, 5, 8, 7, 6] : Array(0...8)
         let visibleOrder = compact ? Array(order.dropFirst(controlPage * 2).prefix(2)) : order
         return VStack(spacing: 8) {
-            if model.isTiltEnabled && !isSettingUp {
-                HStack(spacing: 8) {
-                    command("Stop tilt", icon: "pause.fill") { model.stopTilt() }
-                    command("Center", icon: "scope") { model.recenterTilt() }
-                }
-            }
             ScrollView {
             VStack(spacing: 10) {
-                if !isSettingUp && !model.isTiltEnabled {
-                    Button("Tilt panning") { model.toggleTilt() }
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .buttonStyle(ControlStyle(transparent: overlayControls))
+                HStack(spacing: 8) {
+                    Text((compact ? "\(controlPage + 1)/5 · " : "") + (isSettingUp ? "Try the controls" : model.isOverview ? "Overview" : "Zoom \(Double(model.zoom).formatted(.number.precision(.fractionLength(1))))×"))
+                        .font(.headline.monospacedDigit())
+                        .frame(maxWidth: .infinity)
+                    if !isSettingUp && !model.isTiltEnabled {
+                        Button { tiltDotAnchor = nil; model.toggleTilt() } label: {
+                            Label("Tilt", systemImage: "move.3d")
+                                .font(.callout.weight(.semibold))
+                                .frame(minWidth: 60, minHeight: 44)
+                        }
+                        .buttonStyle(ControlStyle())
                         .disabled(!canPan)
+                        .accessibilityLabel("Start tilt panning")
+                        .accessibilityIdentifier("startTilt")
+                    }
                 }
-                Text((compact ? "\(controlPage + 1)/5 · " : "") + (isSettingUp ? "Try the controls" : model.isOverview ? "Overview" : "Zoom \(Double(model.zoom).formatted(.number.precision(.fractionLength(1))))×"))
-                    .font(.headline.monospacedDigit())
-                    .frame(maxWidth: .infinity, alignment: .center)
+                .foregroundStyle(.white)
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(visibleOrder, id: \.self) { item in
                         if isSettingUp {
@@ -374,8 +449,10 @@ struct ContentView: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         }
-        .frame(height: max(0, min(maxHeight, compact ? 218 : typeSize.isAccessibilitySize ? 420 : 304)))
-        .background(overlayControls ? Color.clear : Color(white: 0.09), in: RoundedRectangle(cornerRadius: 20))
+        .frame(height: max(0, min(maxHeight, compact ? 218 : typeSize.isAccessibilitySize ? 420 : 332)))
+        .background(ManualMenuSurface())
+        .environment(\.manualMenuAppearance, true)
+        .transition(.scale(scale: 0.2, anchor: preferredHand == "left" ? .bottomLeading : .bottomTrailing).combined(with: .opacity))
     }
 
     @ViewBuilder
@@ -445,21 +522,21 @@ struct ContentView: View {
                 Text("Make MonoView fit your hand")
                     .font(.title2.bold())
                     .accessibilityAddTraits(.isHeader)
-                Text(pendingProfile == nil ? "Step \(setupStep + 1) of 3" : "Check your suggested layout")
-                    .font(.headline).foregroundStyle(.yellow)
+                Text(pendingProfile == nil ? "Step \(min(setupStep + 1, 2)) of 2" : "Check your suggested layout")
+                    .font(.headline).foregroundStyle(MonoTheme.accent)
                 switch setupStep {
                 case 0:
-                    Text("Hold your phone naturally. Choose the hand you use below. The panel will move to that side.")
+                    Text("Choose your hand. The controls move to that side.")
                 case 1:
-                    Text("Adjust the panel below. Try its buttons without stretching your thumb or changing your grip.")
+                    Text("Adjust the panel and try its buttons. Save when you can reach them without stretching or changing your grip.")
                 default:
-                    Text(pendingProfile?.regions != nil ? "Try every button without stretching or changing your grip. Use More to cycle through the commands. Save and Adjust are on the final pages. Choose Adjust if any button is uncomfortable." : "Try the corner buttons and the center without stretching or changing your grip. Choose Back to adjust, or Save setup when comfortable.")
+                    Text(pendingProfile?.regions != nil ? "Try the buttons with a relaxed grip. More shows the next controls, including Save and Adjust." : "Try the buttons without stretching. Save when comfortable, or go Back to adjust.")
                 }
-                Text(lastTestedControl.isEmpty ? "The buttons are for practice during setup. No photo is needed." : "\(lastTestedControl) reached. \(testedControls.count) of 9 tried.")
-                    .foregroundStyle(.secondary)
+                Text(lastTestedControl.isEmpty ? "Practice buttons only — no photo needed." : "\(lastTestedControl) reached. \(testedControls.count) of 9 tried.")
+                    .foregroundStyle(MonoTheme.text)
                     .accessibilityIdentifier("reachFeedback")
-                if setupStep == 2 {
-                    Text(pendingProfile?.regions != nil ? "Tap Save in the fitted zone when comfortable. You can change the layout at any time." : "This is a comfort check, not a test you have to pass. You can change the layout at any time.")
+                if setupStep >= 1 {
+                    Text(pendingProfile?.regions != nil ? "If a button feels uncomfortable, choose Adjust. Save when ready." : "You can change this later in Settings.")
                         .font(.footnote)
                 }
             }
@@ -467,8 +544,8 @@ struct ContentView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .foregroundStyle(.white)
-        .background(Color.black)
+        .foregroundStyle(MonoTheme.text)
+        .background(MonoBackground())
     }
 
     private func trialControl(_ item: Int, photoTitle: String) -> some View {
@@ -482,7 +559,7 @@ struct ContentView: View {
                 .overlay(alignment: .topTrailing) {
                     if testedControls.contains(item) {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.black, .yellow)
+                            .foregroundStyle(MonoTheme.royal, MonoTheme.white)
                             .padding(4)
                             .accessibilityHidden(true)
                     }
@@ -527,8 +604,8 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, minHeight: 52)
                         .buttonStyle(ControlStyle(transparent: overlayControls))
                 }
-                Button(setupStep == 2 ? "Save setup" : "Next") {
-                    if setupStep < 2 {
+                Button(setupStep >= 1 ? "Save setup" : "Next") {
+                    if setupStep == 0 {
                         setupStep += 1
                     } else {
                         finishReachSetup()
@@ -542,21 +619,16 @@ struct ContentView: View {
         .padding(12)
         .frame(maxWidth: 336)
         .frame(maxWidth: .infinity, alignment: preferredHand == "left" ? .leading : .trailing)
-        .background(Color(white: 0.06))
+        .foregroundStyle(MonoTheme.text)
+        .background(MonoTheme.surface)
+        .environment(\.colorScheme, .dark)
     }
 
     private var canUseImage: Bool { model.image != nil && !model.isLoading }
     private var canPan: Bool { canUseImage && model.zoom > 1 && !model.isOverview }
 
     private func controlLabel(_ title: String, icon: String) -> some View {
-        VStack(spacing: 5) {
-            Image(systemName: icon).font(.title2)
-            Text(title).font(.callout.weight(.semibold))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, minHeight: 76)
-        .contentShape(Rectangle())
+        ManualMenuLabel(title: title, icon: icon)
     }
 
     private func command(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -568,7 +640,10 @@ struct ContentView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    Text("Make it yours").font(.largeTitle.bold())
+                    HStack(spacing: 16) {
+                        MonoBrandMark(size: 64)
+                        Text("Make it yours").font(.system(.largeTitle, design: .rounded, weight: .bold))
+                    }
                     Text("Which hand do you use?").font(.title2.bold())
                     Picker("Hand used to hold your phone", selection: $preferredHand) {
                         Text("Left").tag("left")
@@ -579,16 +654,18 @@ struct ContentView: View {
                         calibrateAfterSettings = true
                         showSettings = false
                     }
-                    .buttonStyle(ControlStyle(transparent: overlayControls))
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .buttonStyle(ControlStyle())
                     .accessibilityIdentifier("reopenReachSetup")
                     if activeProfile != nil {
-                        Text("A calibrated layout is saved for its recorded orientation. Other orientations and accessibility text sizes use the manual layout. Changing the settings below switches to manual layout.")
+                        Text("Your fitted layout is saved. Rotating the phone or using accessibility text sizes uses the manual layout. Changing hand, width, or height replaces the fitted layout.")
                             .font(.body)
-                        Button("Use manual layout") { useManualLayout() }
-                            .buttonStyle(ControlStyle(transparent: overlayControls))
+                        Button("Use manual layout") { useManualLayout(); startManualSetup(); showSettings = false }
+                            .frame(maxWidth: .infinity, minHeight: 52)
+                            .buttonStyle(ControlStyle())
                     }
                     Text("Thumb reach").font(.title2.bold())
-                    Text("Keep a relaxed grip. Choose a narrower panel to bring the far buttons closer, or raise the panel to your thumb's resting position.")
+                    Text("Choose a comfortable width and height. Keep the same relaxed grip.")
                     Picker("Panel width", selection: $controlWidth) {
                         Text("Compact").tag(288.0)
                         Text("Wide").tag(336.0)
@@ -600,37 +677,197 @@ struct ContentView: View {
                         Text("High").tag(80.0)
                     }
                     .pickerStyle(.segmented)
-                    Text("Position applies in portrait. In landscape, controls sit beside the image on your chosen side.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("Height applies in portrait. In landscape, controls sit on your chosen side.")
+                        .font(.footnote).foregroundStyle(MonoTheme.text)
                     Toggle("Light image background", isOn: $lightCanvas)
                         .font(.title3)
                     Text("Tilt panning").font(.title2.bold())
-                    Text("Zoom in, then choose Tilt in the controls. Hold the phone comfortably as it starts, then tilt gently to explore. Stop pauses movement immediately. Center makes your current grip the neutral position.")
+                    Text("Zoom in and choose Tilt. The controls become a translucent dot. Tilt gently to move; tap the dot to stop and show the controls. Start Tilt again to set a new resting position.")
                     Picker("Tilt sensitivity", selection: $tiltSensitivity) {
                         Text("Gentle").tag(0.6)
                         Text("Normal").tag(1.0)
                         Text("Fast").tag(1.5)
                     }
                     .pickerStyle(.segmented)
-                    Text("Tilt stops when you open Settings, change orientation, drag the photo, show Overview, or leave the app. It stays off until you start it again.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Text("Explore your photo").font(.title2.bold())
-                    Text("Use Zoom in and Zoom out. Drag with one finger or use the arrows. Arrows move your view through the photo.")
-                    Text("Overview shows the whole photo. Return restores your previous zoom and position.")
-                    Text("Zoom reveals existing photo detail; it cannot create new detail.")
-                        .foregroundStyle(.secondary)
+                    DisclosureGroup("Photo controls and tilt help") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Zoom in for detail. Drag with one finger or use the arrows to move through your photo.")
+                            Text("Overview shows the whole photo. Return restores your previous view.")
+                            Text("In a fitted layout, More shows the next set of controls.")
+                            Text("While Tilt is on, double tap the photo for maximum zoom. Double tap again at maximum zoom to fit the whole photo.")
+                            Text("Sweep your thumb upward to zoom in, or downward to zoom out. Curved sweeps work with either hand. Tilt stays on at the full-image size.")
+                            Text("Tilt pauses while you sweep and resumes from your new grip when you lift your thumb. It stops when you tap the dot, open Settings, rotate the phone, show Overview, or leave the app.")
+                            Text("Zoom enlarges existing detail; it cannot add missing detail.")
+                        }
+                        .font(.body)
+                        .padding(.top, 8)
+                    }
                     Button("Reset view") { model.reset() }
-                        .buttonStyle(ControlStyle(transparent: overlayControls))
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .buttonStyle(ControlStyle())
                         .disabled(model.image == nil)
                 }
                 .padding(24)
             }
             Button("Done") { showSettings = false }
                 .frame(maxWidth: .infinity, minHeight: 56)
-                .buttonStyle(ControlStyle(primary: true, transparent: overlayControls))
+                .buttonStyle(ControlStyle(primary: true))
                 .padding(16)
         }
+        .foregroundStyle(MonoTheme.text)
+        .background(MonoBackground())
+        .tint(MonoTheme.accent)
+        .preferredColorScheme(.dark)
         .presentationDragIndicator(.visible)
+    }
+}
+
+/// Purpose comes before reach setup and is acknowledged once on this device.
+struct MonoPurposeView: View {
+    let onContinue: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                MonoBackground()
+                ScrollView {
+                    VStack(spacing: 20) {
+                        Text("MonoView")
+                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                            .accessibilityAddTraits(.isHeader)
+                        Text("See more. Reach comfortably.")
+                            .font(.system(.title2, design: .rounded, weight: .bold))
+                            .accessibilityAddTraits(.isHeader)
+                        Text("Made for people with low vision and for anyone who uses a phone with one hand.")
+                        Text("Seeing detail and reaching controls shouldn’t require an uncomfortable grip. MonoView brings photo magnification and controls that fit your thumb into one place.")
+                        Button(action: onContinue) {
+                            Text("Continue")
+                                .frame(maxWidth: .infinity, minHeight: 56)
+                        }
+                        .buttonStyle(ControlStyle(primary: true))
+                        .frame(maxWidth: 260)
+                            .accessibilityIdentifier("purposeContinue")
+                    }
+                    .font(.body)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 340)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .center)
+                }
+            }
+        }
+        .foregroundStyle(MonoTheme.text)
+        .preferredColorScheme(.dark)
+    }
+}
+
+/// Royal blue surfaces with white text; the photo canvas keeps its own background.
+enum MonoTheme {
+    static let royal = Color(red: 65 / 255, green: 105 / 255, blue: 225 / 255)
+    static let deepBlue = Color(red: 30 / 255, green: 59 / 255, blue: 143 / 255)
+    static let surface = Color(red: 42 / 255, green: 77 / 255, blue: 180 / 255)
+    static let white = Color.white
+    static let text = Color.white
+    static let accent = Color.white
+}
+
+struct MonoBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    var body: some View {
+        LinearGradient(colors: reduceTransparency || contrast == .increased
+                       ? [MonoTheme.surface, MonoTheme.surface]
+                       : [MonoTheme.royal, MonoTheme.surface, MonoTheme.deepBlue],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
+    }
+}
+
+struct MonoBrandMark: View {
+    var size: CGFloat = 80
+    var body: some View {
+        Image("MonoBrand")
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.23, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: size * 0.23).stroke(MonoTheme.white.opacity(0.35), lineWidth: 1))
+            .shadow(color: MonoTheme.deepBlue.opacity(0.3), radius: 8, y: 4)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct ManualMenuAppearanceKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var manualMenuAppearance: Bool {
+        get { self[ManualMenuAppearanceKey.self] }
+        set { self[ManualMenuAppearanceKey.self] = newValue }
+    }
+}
+
+/// A single shared surface lets icons read as a menu rather than separate cards.
+struct ManualMenuSurface: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 28, style: .continuous)
+            .fill(Color(white: 0.07).opacity(reduceTransparency ? 1 : contrast == .increased ? 0.85 : 0.62))
+            .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.white.opacity(contrast == .increased ? 1 : 0.3), lineWidth: contrast == .increased ? 2 : 1))
+            .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
+    }
+}
+
+/// A single, generously sized stop target keeps the image visible during tilt panning.
+struct TiltDotButton: View {
+    let zoom: CGFloat
+    let onStop: () -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        Button(action: onStop) {
+            ZStack {
+                Circle().fill(Color.black.opacity(reduceTransparency ? 1 : 0.28))
+                Circle().stroke(Color.black.opacity(0.75), lineWidth: 3)
+                Circle().stroke(Color.white.opacity(contrast == .increased ? 1 : 0.75), lineWidth: 1.5)
+                Circle().fill(Color.white.opacity(reduceTransparency ? 1 : 0.65))
+                    .frame(width: 28, height: 28)
+            }
+            .frame(width: 60, height: 60)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Stop tilt and show controls")
+        .accessibilityValue("Tilt panning is on. Zoom \(Int(zoom * 100)) percent")
+        .accessibilityHint("Double tap to stop movement and restore the control panel.")
+        .accessibilityIdentifier("stopTiltDot")
+    }
+}
+
+struct ManualMenuLabel: View {
+    let title: String
+    let icon: String
+    @Environment(\.manualMenuAppearance) private var manual
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(manual ? .system(size: 27, weight: .medium) : .title2)
+                .frame(minHeight: 32)
+                .accessibilityHidden(true)
+            Text(title).font(.callout.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 76)
+        .contentShape(Rectangle())
+        .shadow(color: manual ? .black.opacity(0.8) : .clear, radius: 1, y: 1)
     }
 }
 
@@ -638,18 +875,40 @@ struct ControlStyle: ButtonStyle {
     var primary = false
     var transparent = false
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
 
+    @Environment(\.manualMenuAppearance) private var manual
+
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
+        if manual {
+            configuration.label
+                .font(.headline)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .background(Color.white.opacity(configuration.isPressed ? 0.24 : primary ? 0.12 : 0),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .opacity(enabled ? 1 : 0.45)
+        } else {
         configuration.label
             .font(.headline)
             .padding(.horizontal, 6)
-            .foregroundStyle(primary ? (transparent ? Color.yellow : Color.black) : Color.white)
-            .shadow(color: transparent ? .black : .clear, radius: 1, y: 1)
-            .background(transparent ? Color.clear : primary ? Color.yellow : Color(white: configuration.isPressed ? 0.32 : 0.19), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14)
-                .stroke(transparent ? (primary ? Color.yellow : Color.white.opacity(0.8)) : primary ? Color.clear : Color(white: 0.5), lineWidth: transparent ? 1.5 : 1)
-                .shadow(color: transparent ? .black : .clear, radius: 1))
-            .opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.4)
+            .foregroundStyle(primary && !transparent ? MonoTheme.deepBlue : MonoTheme.white)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(transparent
+                          ? AnyShapeStyle(MonoTheme.deepBlue.opacity(reduceTransparency ? 1 : 0.88))
+                          : primary
+                            ? AnyShapeStyle(MonoTheme.white)
+                            : AnyShapeStyle(MonoTheme.surface))
+            }
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(MonoTheme.white.opacity(primary || contrast == .increased ? 1 : 0.75),
+                        lineWidth: primary || contrast == .increased ? 2.5 : 1.5))
+            .shadow(color: MonoTheme.deepBlue.opacity(transparent ? 0 : 0.3), radius: 4, y: 2)
+            .opacity(enabled ? (configuration.isPressed ? 0.85 : 1) : 0.45)
+        }
     }
 }
 
