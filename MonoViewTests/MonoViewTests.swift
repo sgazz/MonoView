@@ -3,6 +3,79 @@ import SwiftUI
 @testable import MonoView
 
 struct MonoViewTests {
+    @Test func readingRulerClampsBandAndDragForSmallAndLargeViewports() {
+        for height: CGFloat in [20, 320, 844] {
+            for position in [-2.0, 0, 0.45, 1, 3, .nan] {
+                let band = ReadingRulerGeometry.band(height: height, requestedHeight: 80, position: position)
+                #expect(band.minY >= 0 && band.maxY <= height)
+                #expect(band.height > 0 && band.height <= height)
+                if height > band.height {
+                    let restored = ReadingRulerGeometry.position(center: band.midY, height: height, bandHeight: band.height)
+                    #expect(restored >= 0 && restored <= 1)
+                    #expect(abs(ReadingRulerGeometry.band(height: height, requestedHeight: 80, position: restored).midY - band.midY) < 0.001)
+                }
+            }
+        }
+        #expect(ReadingRulerGeometry.band(height: 0, requestedHeight: 80, position: 0.5) == .zero)
+        #expect(ReadingRulerGeometry.position(center: -100, height: 844, bandHeight: 80) == 0)
+        #expect(ReadingRulerGeometry.position(center: 9999, height: 844, bandHeight: 80) == 1)
+    }
+
+    @Test @MainActor func customZoomPreferencesControlTargetAndSweepRate() async throws {
+        let model = ViewerModel(tiltController: MockTiltController())
+        let data = try #require(UIGraphicsImageRenderer(size: CGSize(width: 600, height: 600)).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 600, height: 600))
+        }.pngData())
+        await model.completeImport(data, id: model.beginImport())
+        model.resizeViewport(CGSize(width: 300, height: 300))
+        model.changeZoom(by: 2)
+        model.toggleTilt()
+        model.setZoomPreferences(speed: 0.6, doubleTap: 4)
+        model.toggleTiltZoomLimit()
+        #expect(model.zoom == 4 && model.isTiltEnabled)
+        model.toggleTiltZoomLimit()
+        #expect(model.zoom == 1 && model.isTiltEnabled)
+        model.updateTiltZoomSweep(translation: CGSize(width: 50, height: -100))
+        #expect(abs(model.zoom - pow(2, 0.6)) < 0.00001)
+        model.endTiltZoomSweep()
+        model.setZoomPreferences(speed: .nan, doubleTap: .infinity)
+        model.toggleTiltZoomLimit()
+        #expect(model.zoom == 20)
+    }
+
+    @Test func panelPositionClampsToEnvelopeForBothHandsAndOrientations() {
+        for size in [CGSize(width: 390, height: 760), CGSize(width: 760, height: 390), CGSize(width: 320, height: 480)] {
+            let panel = CGSize(width: min(288, size.width - 24), height: min(352, size.height - 24))
+            for hand in ["left", "right"] {
+                let range = PanelGeometry.range(container: size, panel: panel, hand: hand)
+                for point in [CGPoint(x: -999, y: -999), CGPoint(x: 9999, y: 9999)] {
+                    let saved = PanelGeometry.position(origin: point, range: range)
+                    let origin = PanelGeometry.origin(position: saved, range: range)
+                    #expect(origin.x >= 12 && origin.y >= 12)
+                    #expect(origin.x + panel.width <= size.width - 12 + 0.001)
+                    #expect(origin.y + panel.height <= size.height - 12 + 0.001)
+                    #expect(range.contains(origin) || origin.x == range.maxX || origin.y == range.maxY)
+                }
+            }
+        }
+    }
+
+    @Test func floatingButtonMovementStaysWithinChosenSideAndScreen() {
+        for size in [CGSize(width: 390, height: 750), CGSize(width: 750, height: 390)] {
+            for hand in ["left", "right"] {
+                let range = PanelGeometry.range(container: size, panel: CGSize(width: 60, height: 60), hand: hand)
+                for target in [CGPoint(x: -999, y: -999), CGPoint(x: 9999, y: 9999)] {
+                    let saved = PanelGeometry.position(origin: target, range: range)
+                    let origin = PanelGeometry.origin(position: saved, range: range)
+                    #expect(origin.x >= 12 && origin.y >= 12)
+                    #expect(origin.x + 60 <= size.width - 12)
+                    #expect(origin.y + 60 <= size.height - 12)
+                    #expect(hand == "left" ? origin.x + 30 < size.width / 2 : origin.x + 30 > size.width / 2)
+                }
+            }
+        }
+    }
+
     @Test func fittedImageCannotPan() {
         let result = ViewerModel.clamp(CGSize(width: 300, height: -300), image: CGSize(width: 1200, height: 800), viewport: CGSize(width: 400, height: 600), zoom: 1)
         #expect(result == .zero)
