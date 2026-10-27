@@ -69,3 +69,7 @@ xcodebuild -project MonoView.xcodeproj -scheme MonoView \
 ## Local data
 
 The app has no account, analytics or upload workflow. Photo import uses the system picker. Preferences, guide completion and panel positions are stored locally in app preferences. The current guide does not collect thumb trails. OCR text is not saved to disk or uploaded; only reading preferences persist.
+
+## Optional support
+
+Settings → **Support MonoView** offers optional one-time tips through StoreKit. All features remain free. See [support setup](docs/SUPPORT_SETUP.md) for product IDs, the local testing scheme and the App Store Connect steps required before real payments are available.

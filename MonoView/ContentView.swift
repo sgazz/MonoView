@@ -3,6 +3,7 @@ import PhotosUI
 
 struct ContentView: View {
     @StateObject private var model: ViewerModel
+    @StateObject private var supportStore = SupportStore()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -11,6 +12,7 @@ struct ContentView: View {
     }
     @State private var selection: PhotosPickerItem?
     @State private var showSettings = false
+    @State private var showSupport = false
     @State private var showPhotoTools = false
     @State private var showReader = false
     @State private var showOriginal = false
@@ -51,6 +53,7 @@ struct ContentView: View {
             fullScreenContent(size: geometry.size)
         }
         .onAppear {
+            supportStore.startListening()
             model.setTiltSensitivity(tiltSensitivity)
             model.setZoomPreferences(speed: zoomSpeed, doubleTap: doubleTapZoom)
             updateIdleTimer()
@@ -456,6 +459,10 @@ struct ContentView: View {
                             Text("Zoom enlarges existing detail; it cannot add missing detail.")
                         }.padding(.top, 12)
                     }
+                    Button { showSupport = true } label: {
+                        Label("Support MonoView", systemImage: "heart")
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                    }.buttonStyle(ControlStyle()).accessibilityIdentifier("openSupport")
                     Button { model.reset() } label: {
                         Label("Reset photo view", systemImage: "arrow.counterclockwise").frame(maxWidth: .infinity, minHeight: 52)
                     }.buttonStyle(ControlStyle()).disabled(model.image == nil)
@@ -467,6 +474,7 @@ struct ContentView: View {
         }
         .foregroundStyle(MonoTheme.text).background(MonoBackground())
         .tint(MonoTheme.accent).preferredColorScheme(.dark).presentationDragIndicator(.visible)
+        .sheet(isPresented: $showSupport) { SupportMonoView(store: supportStore) }
     }
 }
 
