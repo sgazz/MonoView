@@ -1,0 +1,61 @@
+{
+  "identifier": "MonoViewSupport",
+  "nonRenewingSubscriptions": [],
+  "products": [
+    {
+      "displayPrice": "1.99",
+      "familyShareable": false,
+      "internalID": "monoview-support-small",
+      "localizations": [
+        {
+          "description": "Optional one-time support for MonoView development. No features are unlocked.",
+          "displayName": "Small support",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "com.monoview.support.small",
+      "referenceName": "Small support",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "4.99",
+      "familyShareable": false,
+      "internalID": "monoview-support-development",
+      "localizations": [
+        {
+          "description": "Optional one-time support for MonoView development. No features are unlocked.",
+          "displayName": "Support development",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "com.monoview.support.development",
+      "referenceName": "Support development",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "9.99",
+      "familyShareable": false,
+      "internalID": "monoview-support-extra",
+      "localizations": [
+        {
+          "description": "Optional one-time support for MonoView development. No features are unlocked.",
+          "displayName": "Extra support",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "com.monoview.support.extra",
+      "referenceName": "Extra support",
+      "type": "Consumable"
+    }
+  ],
+  "settings": {
+    "_failTransactionsEnabled": false,
+    "_locale": "en_US",
+    "_storefront": "USA"
+  },
+  "subscriptionGroups": [],
+  "version": {
+    "major": 4,
+    "minor": 0
+  }
+}

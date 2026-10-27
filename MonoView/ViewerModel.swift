@@ -21,6 +21,13 @@ final class ViewerModel: ObservableObject {
         self.tiltController = tiltController ?? TiltMotionService()
     }
 
+    private var zoomSpeed = 1.0
+    private var doubleTapZoom: CGFloat = 20
+    func setZoomPreferences(speed: Double, doubleTap: Double) {
+        zoomSpeed = speed.isFinite ? min(1.5, max(0.6, speed)) : 1
+        doubleTapZoom = doubleTap.isFinite ? min(Self.maximumZoom, max(2, CGFloat(doubleTap))) : 20
+    }
+
     func setTiltSensitivity(_ value: Double) {
         tiltController.sensitivity = min(2, max(0.4, value))
     }
@@ -87,6 +94,7 @@ final class ViewerModel: ObservableObject {
         leaveOverview()
         let next = min(Self.maximumZoom, max(1, target))
         let ratio = next / zoom
+        if next != zoom && (next == 1 || next == Self.maximumZoom) { ComfortFeedback.play(boundary: true) }
         zoom = next
         // Thumb zoom can return to 1× without losing the active Tilt gesture mode.
         if next <= 1 && !keepingTilt { stopTilt() }
@@ -96,7 +104,7 @@ final class ViewerModel: ObservableObject {
     func toggleTiltZoomLimit() {
         guard isTiltEnabled, image != nil, !isLoading else { return }
         tiltSweepStartZoom = nil
-        applyZoom(zoom >= Self.maximumZoom - 0.001 ? 1 : Self.maximumZoom, keepingTilt: true)
+        applyZoom(zoom >= doubleTapZoom - 0.001 ? 1 : doubleTapZoom, keepingTilt: true)
         tiltController.recenter()
     }
 
@@ -104,9 +112,9 @@ final class ViewerModel: ObservableObject {
         guard isTiltEnabled, image != nil, !isLoading, translation.height.isFinite else { return }
         if tiltSweepStartZoom == nil { tiltSweepStartZoom = zoom }
         guard let start = tiltSweepStartZoom else { return }
-        // Each 100 screen points of vertical travel doubles/halves the scale.
+        // At normal speed, 100 screen points of vertical travel doubles/halves the scale.
         // Horizontal travel is unrestricted, so left and right thumb arcs behave alike.
-        let exponent = min(10, max(-10, -translation.height / 100))
+        let exponent = min(10, max(-10, -translation.height * zoomSpeed / 100))
         applyZoom(start * pow(2, exponent), keepingTilt: true)
     }
 
